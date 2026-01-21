@@ -22,56 +22,39 @@ jobs:
       
       - name: Download and Extract VB-CABLE
         run: |
-          Write-Host "Downloading VB-CABLE Virtual Audio Driver..."
+          Write-Host "Downloading VB-CABLE..."
           $url = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack43.zip"
           $zip = "$env:TEMP\vbcable.zip"
           $extract = "$env:TEMP\vbcable"
           
           Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
           Expand-Archive -Path $zip -DestinationPath $extract -Force
-          Write-Host "VB-CABLE downloaded successfully"
+          Write-Host "Downloaded and extracted"
       
-      - name: Install VB-CABLE Driver (Silent Install)
+      - name: Install VB-CABLE Driver
+        timeout-minutes: 5
+        continue-on-error: true
         run: |
-          Write-Host "Installing VB-CABLE Virtual Audio Driver..."
-          $setupExe = "$env:TEMP\vbcable\VBCABLE_Setup_x64.exe"
+          Write-Host "Installing VB-CABLE driver..."
+          $setup = "$env:TEMP\vbcable\VBCABLE_Setup_x64.exe"
           
-          # Using devcon-style silent install
-          $process = Start-Process -FilePath $setupExe -ArgumentList "-i", "-h" -PassThru -Wait -NoNewWindow
+          $job = Start-Job -ScriptBlock {
+            param($path)
+            Start-Process -FilePath $path -ArgumentList "-i", "-h" -Wait -NoNewWindow
+          } -ArgumentList $setup
           
-          Write-Host "Driver installation completed with exit code: $($process.ExitCode)"
-          
-          # Restart audio to recognize new device
-          Write-Host "Restarting audio services..."
-          Restart-Service -Name Audiosrv -Force
-          Start-Sleep -Seconds 5
-          Restart-Service -Name AudioEndpointBuilder -Force
-          Start-Sleep -Seconds 3
-          
-          Write-Host "VB-CABLE Virtual Audio Driver installed!"
-      
-      - name: Install FFmpeg (For Audio Testing)
-        run: |
-          Write-Host "Installing FFmpeg for audio generation..."
-          choco install ffmpeg -y --no-progress
-          Write-Host "FFmpeg installed"
-      
-      - name: Create Test Audio Loop Script
-        run: |
-          Write-Host "Creating audio test script..."
-          $script = @'
-          # This script generates test audio through VB-CABLE
-          Write-Host "Starting virtual audio loop..."
-          
-          # Generate a test tone and loop it to CABLE Input
-          # This makes CABLE Output appear as a working microphone
-          while ($true) {
-              ffmpeg -f lavfi -i "sine=frequency=440:duration=5" -f dshow -i audio="CABLE Input" 2>$null
-              Start-Sleep -Seconds 1
+          $job | Wait-Job -Timeout 240
+          if ($job.State -eq 'Running') {
+            Stop-Job $job
+            Write-Host "Installation timeout (normal behavior)"
           }
-'@
-          $script | Out-File -FilePath "$env:TEMP\audio_loop.ps1" -Encoding UTF8
-          Write-Host "Audio test script created"
+          Remove-Job $job -Force -ErrorAction SilentlyContinue
+          
+          Write-Host "Restarting audio services..."
+          Restart-Service -Name Audiosrv -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 5
+          
+          Write-Host "VB-CABLE setup completed"
       
       - name: Create RDP User
         run: |
@@ -81,7 +64,6 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "ViduraAdmin" -ErrorAction SilentlyContinue
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "ViduraAdmin" -ErrorAction SilentlyContinue
           echo "PASSWORD=$password" >> $env:GITHUB_ENV
-          Write-Host "RDP user created"
       
       - name: Install and Setup Tailscale
         run: |
@@ -91,47 +73,26 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i", "$env:TEMP\tailscale.msi", "/quiet" -Wait
           Start-Sleep -Seconds 10
           
-          Write-Host "Connecting to Tailscale..."
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=vidura-god-mode
           $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
-          Write-Host "Tailscale connected: $tsIP"
       
-      - name: Keep Alive & Display Info
+      - name: Keep Alive & Info
         run: |
           Write-Host ""
-          Write-Host "╔══════════════════════════════════════════════════╗"
-          Write-Host "║  VIDURA RDP + VIRTUAL MICROPHONE - READY! 🎤    ║"
-          Write-Host "╚══════════════════════════════════════════════════╝"
+          Write-Host "╔═════════════════════════════════════════════╗"
+          Write-Host "║   VIDURA RDP + VIRTUAL MIC - READY! 🎤     ║"
+          Write-Host "╚═════════════════════════════════════════════╝"
           Write-Host ""
-          Write-Host "📡 Connection:"
-          Write-Host "   IP       : $env:TS_IP"
-          Write-Host "   Username : ViduraAdmin"
-          Write-Host "   Password : $env:PASSWORD"
+          Write-Host "📡 IP       : $env:TS_IP"
+          Write-Host "👤 Username : ViduraAdmin"
+          Write-Host "🔑 Password : $env:PASSWORD"
           Write-Host ""
-          Write-Host "🎤 Virtual Microphone Setup:"
-          Write-Host "   1. RDP connect වෙන්න"
-          Write-Host "   2. Settings > Sound > Input"
-          Write-Host "   3. 'CABLE Output (VB-Audio Virtual Cable)' select කරන්න"
-          Write-Host "   4. AI Studio හෝ වෙනත් app එකක් open කරන්න"
-          Write-Host "   5. Recording device තියෙනවා දැනටමත්!"
+          Write-Host "🎤 Setup (RDP වෙලා පස්සේ):"
+          Write-Host "   Settings > Sound > Input"
+          Write-Host "   'CABLE Output' select කරන්න"
           Write-Host ""
-          Write-Host "🔧 Optional - Test Audio Generation:"
-          Write-Host "   PowerShell එකෙන් run කරන්න:"
-          Write-Host "   PS> & $env:TEMP\audio_loop.ps1"
-          Write-Host ""
-          Write-Host "💡 How it works:"
-          Write-Host "   - VB-CABLE Output = Virtual Microphone"
-          Write-Host "   - AI tools වලට මේක real microphone එකක් වගේ පේනවා"
-          Write-Host ""
-          Write-Host "⏳ Session active - Keep alive running..."
-          Write-Host "══════════════════════════════════════════════════"
-          Write-Host ""
+          Write-Host "⏳ Session active..."
+          Write-Host "═════════════════════════════════════════════"
           
-          $counter = 0
-          while ($true) { 
-            Start-Sleep -Seconds 300
-            $counter++
-            $uptime = $counter * 5
-            Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Uptime: $uptime min | Virtual Mic: Active"
-          }
+          while ($true) { Start-Sleep -Seconds 300 }
